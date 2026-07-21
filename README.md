@@ -55,3 +55,24 @@ assets/
 ## Licença
 
 Este projeto está licenciado sob a [MIT License](LICENSE).
+
+
+## Execução local (MVP funcional)
+
+1. Iniciar backend:
+
+```bash
+go run ./cmd/deskhub-backend
+```
+
+2. Em outro terminal, iniciar firmware simulador:
+
+```bash
+go run ./cmd/deskhub-firmware
+```
+
+3. Rodar testes:
+
+```bash
+go test ./...
+```

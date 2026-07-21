@@ -39,6 +39,10 @@ assets/
 ## Documentação principal
 
 - [Technical Master Plan](docs/TECHNICAL_MASTER_PLAN.md)
+- [API e MQTT Contracts v1](docs/API_MQTT_CONTRACTS_V1.md)
+- [MVP Acceptance Criteria](docs/MVP_ACCEPTANCE_CRITERIA.md)
+- [Validation Plan v1](docs/VALIDATION_PLAN.md)
+- [Implementation Backlog](docs/IMPLEMENTATION_BACKLOG.md)
 
 ## Roadmap resumido
 

@@ -547,25 +547,35 @@ Paleta neutra
 
 # 19. Performance
 
+Baseline mensurável (v1)
+
 Boot
 
 <3 segundos
 
-Tela
+FPS
 
-60 FPS
+>=30 FPS (alvo: 60 FPS quando possível)
 
-RAM livre
+RAM
 
->30%
+Uso <70% (equivalente a RAM livre >30%)
 
-Uso CPU
+CPU
 
-<40%
+Uso nominal <40% (picos controlados <60%)
 
-Tempo atualização Widget
+Tempo de atualização de widget
+
+SLO <100 ms (alvo operacional <50 ms)
+
+Latência de input
 
 <50 ms
+
+Reconexão WiFi
+
+<10 segundos
 
 ---
 
@@ -746,6 +756,521 @@ IA Local
 Suporte Raspberry Pi
 
 Versão Linux
+
+---
+
+---
+
+# 27. Arquitetura do Sistema
+
+## 27.1 Visão Geral
+
+DeskHub será dividido em quatro grandes domínios independentes.
+
+```text
++------------------------------------------------------+
+|                    Usuário                           |
++-------------------------+----------------------------+
+                          |
+                  Interface Física
+                          |
++------------------------------------------------------+
+|                     Firmware                         |
++------------------------------------------------------+
+| Core | Widgets | Display | Input | Network | Storage |
++------------------------------------------------------+
+                          |
+                    MQTT / HTTPS
+                          |
++------------------------------------------------------+
+|                     Backend                          |
++------------------------------------------------------+
+| API | Cache | Integrations | Auth | Notification     |
++------------------------------------------------------+
+                          |
+                  Serviços Externos
+```
+
+Cada camada possui responsabilidade única.
+
+Toda comunicação deve ocorrer através de contratos bem definidos.
+
+---
+
+# 28. Arquitetura do Firmware
+
+O firmware será dividido em três níveis.
+
+## Core
+
+Responsável pelo funcionamento do dispositivo.
+
+Responsabilidades
+
+- Inicialização
+- Boot
+- Watchdog
+- Gerenciamento de memória
+- Sistema de eventos
+- Scheduler
+- OTA
+- Storage
+- Configuração
+
+## Services
+
+Serviços compartilhados
+
+- Display
+- WiFi
+- MQTT
+- HTTP
+- Filesystem
+- RTC
+- Power
+- Logger
+- Animation
+- Theme
+- Input
+
+## Features
+
+Tudo que o usuário vê
+
+- Widgets
+- Páginas
+- Menus
+- Notificações
+- Popup
+- Overlay
+
+---
+
+# 29. Boot Sequence
+
+```text
+Power On
+↓
+POST
+↓
+GPIO Check
+↓
+Filesystem
+↓
+Configuration
+↓
+Display Init
+↓
+Load Theme
+↓
+Load Widgets
+↓
+WiFi
+↓
+MQTT
+↓
+Backend Sync
+↓
+Ready
+```
+
+Tempo máximo esperado: <3 segundos.
+
+---
+
+# 30. Máquina de Estados
+
+Estados possíveis
+
+- BOOTING
+- IDLE
+- SYNCING
+- UPDATING
+- SETUP
+- SLEEP
+- ERROR
+- RECOVERY
+
+Toda transição deverá possuir timeout.
+
+---
+
+# 31. Sistema de Widgets
+
+Todo widget deverá obedecer ao mesmo contrato.
+
+Estados
+
+- Created
+- Loading
+- Ready
+- Paused
+- Updating
+- Hidden
+- Destroyed
+
+Cada widget possui
+
+- UUID
+- Nome
+- Descrição
+- Versão
+- Autor
+- Dependências
+- Permissões
+- Tempo de atualização
+- Prioridade
+- Memória utilizada
+- Estado
+- Eventos publicados
+- Eventos escutados
+
+---
+
+# 32. Ciclo de Vida dos Widgets
+
+```text
+Create
+↓
+Initialize
+↓
+Load Resources
+↓
+First Render
+↓
+Visible
+↓
+Update
+↓
+Sleep
+↓
+Wake
+↓
+Destroy
+```
+
+Atualizações devem ocorrer em background.
+
+---
+
+# 33. Sistema de Eventos
+
+Arquitetura Publish/Subscribe.
+
+Nenhum widget pode chamar outro diretamente.
+
+Eventos previstos
+
+- TimeChanged
+- MinuteChanged
+- HourChanged
+- WeatherUpdated
+- NotificationReceived
+- SpotifyChanged
+- PageChanged
+- ThemeChanged
+- BrightnessChanged
+- WifiConnected
+- WifiDisconnected
+- MQTTConnected
+- MQTTDisconnected
+- SleepMode
+- WakeUp
+- OTAStarted
+- OTAFinished
+
+---
+
+# 34. Sistema de Páginas
+
+Páginas base
+
+- Home
+- Trabalho
+- Música
+- Casa
+- Sistema
+- Impressora
+- Financeiro
+- Configuração
+
+Cada página possui
+
+- Nome
+- Ícone
+- Widgets
+- Layout
+- Prioridade
+- Permissões
+- Animação de entrada
+- Animação de saída
+
+---
+
+# 35. Sistema de Layout
+
+Tipos
+
+- Grid
+- Columns
+- Rows
+- Cards
+- Full Screen
+- Scrollable
+- Dynamic
+
+O Layout Engine calcula automaticamente o posicionamento.
+
+---
+
+# 36. Design Responsivo
+
+Suporte esperado a múltiplos displays
+
+- 128x64 OLED
+- 240x240 TFT
+- 320x240 TFT
+- 480x320 IPS
+- 800x480 (futuro)
+
+Nenhum widget deve assumir resolução fixa.
+
+---
+
+# 37. Sistema de Temas
+
+Tema define
+
+- Cores
+- Ícones
+- Fontes
+- Espaçamento
+- Animações
+- Bordas
+- Sombras
+- Gradientes
+
+Tema pode ser alterado sem reinicialização.
+
+---
+
+# 38. Sistema de Fontes
+
+Categorias
+
+- Tiny
+- Small
+- Normal
+- Large
+- Title
+- Display
+
+Widgets usam categoria e não tamanho absoluto.
+
+---
+
+# 39. Sistema de Ícones
+
+Biblioteca própria.
+
+Vetorial quando possível com fallback bitmap.
+
+Categorias
+
+- System
+- Weather
+- Music
+- Notification
+- Network
+- Printer
+- Calendar
+- Settings
+- Home
+- IoT
+
+---
+
+# 40. Sistema de Navegação
+
+Entradas
+
+- Encoder
+- Botões
+- Touch (futuro)
+- BLE Remote (futuro)
+- Gestos (futuro)
+
+Nenhuma ação crítica pode ocorrer em um único clique.
+
+---
+
+# 41. Configuração Inicial
+
+Fluxo
+
+```text
+Primeiro Boot
+↓
+Modo AP
+↓
+Portal Captive
+↓
+Idioma
+↓
+WiFi
+↓
+Timezone
+↓
+Backend
+↓
+MQTT
+↓
+Tema
+↓
+Download Configuração
+↓
+Finalização
+```
+
+Após configuração inicial, o AP deve ser desativado.
+
+---
+
+# 42. Sistema de Configuração
+
+Categorias
+
+- Rede
+- Tela
+- Som
+- Widgets
+- Integrações
+- Sistema
+- Desenvolvedor
+- Backup
+
+Toda configuração possui
+
+- Valor padrão
+- Tipo
+- Validação
+- Descrição
+- Persistência
+- Versão
+
+---
+
+# 43. Persistência
+
+Categorias
+
+- Configuração
+- Preferências
+- Cache
+- Estado
+- Sessão
+- Logs
+
+Usar camada de abstração de storage.
+
+---
+
+# 44. Estratégia de Cache
+
+Cache local com TTL independente por domínio (clima, agenda, notícias, imagens, ícones, tempo e Spotify).
+
+---
+
+# 45. Sincronização
+
+Sincronização nunca bloqueia renderização.
+
+Pode ocorrer em:
+
+- Inicialização
+- Mudança de WiFi
+- Intervalo
+- Evento
+- Solicitação do usuário
+
+---
+
+# 46. Tratamento de Erros
+
+Categorias
+
+- Hardware
+- Rede
+- Backend
+- Widget
+- Renderização
+- OTA
+- Storage
+
+Cada erro deve possuir
+
+- Código
+- Descrição
+- Origem
+- Nível
+- Solução sugerida
+- Possibilidade de recuperação
+
+---
+
+# 47. Recovery
+
+Caso backend indisponível
+
+- Entrar em modo offline
+- Utilizar cache
+- Exibir aviso discreto
+- Tentar reconectar
+
+Nunca reiniciar automaticamente por perda de conexão.
+
+---
+
+# 48. Watchdog
+
+Monitorar
+
+- Loop principal
+- Render
+- WiFi
+- MQTT
+- Scheduler
+- OTA
+
+Tempo máximo configurável por módulo.
+
+---
+
+# 49. Scheduler
+
+Prioridades
+
+- Realtime
+- High
+- Normal
+- Low
+- Background
+
+Input possui prioridade máxima.
+Renderização possui prioridade superior a widgets.
+
+---
+
+# 50. Objetivos de Qualidade (Baseline de Aceite)
+
+- Disponibilidade: >=99%
+- Boot: <3 segundos
+- Reconexão WiFi: <10 segundos
+- Atualização de widget: SLO <100 ms (alvo <50 ms)
+- Uso de RAM: <70%
+- Uso de CPU: nominal <40%, pico <60%
+- FPS: mínimo 30, alvo 60 quando possível
+- Resposta de input: <50 ms
 
 ---
 

@@ -1,0 +1,24 @@
+# Ignore build artifacts
+build/
+dist/
+out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
+
+# ESP-IDF / PlatformIO
+.pio/
+.sdkconfig
+sdkconfig
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

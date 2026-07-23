@@ -24,3 +24,10 @@ go run ./cmd/deskhub-backend
 
 - `dev1` / `x`
 - `demo-device` / `local-only`
+
+## Regras de validação de payload
+
+- Endpoints de escrita (`/v1/auth/token`, `/heartbeat`, `/events`) rejeitam campos desconhecidos.
+- Endpoints de escrita rejeitam payload com múltiplos objetos JSON no mesmo body.
+- `heartbeat` exige `firmwareVersion` não vazio e `cpuUsage`/`ramUsage` no intervalo `0..100`.
+- `events` exige `schemaVersion` e `type` não vazios.

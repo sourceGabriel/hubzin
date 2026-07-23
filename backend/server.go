@@ -3,6 +3,8 @@ package backend
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -66,9 +68,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req contracts.TokenRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := decodeStrictJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid token payload")
 		return
 	}
@@ -122,8 +122,12 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.ota)
 	case r.Method == http.MethodPost && resource == "heartbeat":
 		var hb contracts.Heartbeat
-		if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+		if err := decodeStrictJSON(r, &hb); err != nil {
 			writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid heartbeat")
+			return
+		}
+		if strings.TrimSpace(hb.FirmwareVersion) == "" || hb.CPUUsage < 0 || hb.CPUUsage > 100 || hb.RAMUsage < 0 || hb.RAMUsage > 100 {
+			writeErr(w, http.StatusBadRequest, "INVALID_HEARTBEAT", "invalid heartbeat values")
 			return
 		}
 		s.mu.Lock()
@@ -140,8 +144,14 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 	case r.Method == http.MethodPost && resource == "events":
 		var ev contracts.Envelope
-		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		if err := decodeStrictJSON(r, &ev); err != nil {
 			writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid event")
+			return
+		}
+		ev.Type = strings.TrimSpace(ev.Type)
+		ev.SchemaVersion = strings.TrimSpace(ev.SchemaVersion)
+		if ev.Type == "" || ev.SchemaVersion == "" {
+			writeErr(w, http.StatusBadRequest, "INVALID_EVENT", "invalid event values")
 			return
 		}
 		ev.DeviceID = deviceID
@@ -187,4 +197,16 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	writeJSON(w, status, contracts.ErrorResponse{Error: contracts.APIError{Code: code, Message: msg}})
+}
+
+func decodeStrictJSON(r *http.Request, target interface{}) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected extra json content")
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 type Server struct {
 	mu        sync.RWMutex
+	deviceSecrets map[string]string
 	config    contracts.DeviceConfig
 	status    map[string]contracts.DeviceStatus
 	snapshots map[string]contracts.WidgetSnapshot
@@ -21,6 +23,10 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
+		deviceSecrets: map[string]string{
+			"dev1":        "x",
+			"demo-device": "local-only",
+		},
 		config: contracts.DeviceConfig{
 			SchemaVersion: "1.0",
 			Theme:         "dark",
@@ -60,8 +66,16 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req contracts.TokenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceID == "" {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid token payload")
+		return
+	}
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.DeviceSecret = strings.TrimSpace(req.DeviceSecret)
+	if !s.isValidDeviceCredentials(req.DeviceID, req.DeviceSecret) {
+		writeErr(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid credentials")
 		return
 	}
 	writeJSON(w, http.StatusOK, contracts.TokenResponse{
@@ -69,6 +83,20 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		RefreshToken: "refresh-" + req.DeviceID,
 		ExpiresAt:    time.Now().Add(1 * time.Hour),
 	})
+}
+
+func (s *Server) isValidDeviceCredentials(deviceID, deviceSecret string) bool {
+	if deviceID == "" || deviceSecret == "" {
+		return false
+	}
+	s.mu.RLock()
+	expected, ok := s.deviceSecrets[deviceID]
+	s.mu.RUnlock()
+	compareAgainst := "invalid"
+	if ok {
+		compareAgainst = expected
+	}
+	return ok && subtle.ConstantTimeCompare([]byte(compareAgainst), []byte(deviceSecret)) == 1
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {

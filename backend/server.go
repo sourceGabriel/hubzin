@@ -1,7 +1,9 @@
 package backend
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,13 +17,19 @@ import (
 )
 
 type Server struct {
-	mu        sync.RWMutex
+	mu            sync.RWMutex
 	deviceSecrets map[string]string
-	config    contracts.DeviceConfig
-	status    map[string]contracts.DeviceStatus
-	snapshots map[string]contracts.WidgetSnapshot
-	ota       contracts.OTAInfo
-	events    []contracts.Envelope
+	tokens        map[string]tokenSession
+	config        contracts.DeviceConfig
+	status        map[string]contracts.DeviceStatus
+	snapshots     map[string]contracts.WidgetSnapshot
+	ota           contracts.OTAInfo
+	events        []contracts.Envelope
+}
+
+type tokenSession struct {
+	DeviceID  string
+	ExpiresAt time.Time
 }
 
 func NewServer() *Server {
@@ -30,6 +38,7 @@ func NewServer() *Server {
 			"dev1":        "x",
 			"demo-device": "local-only",
 		},
+		tokens: map[string]tokenSession{},
 		config: contracts.DeviceConfig{
 			SchemaVersion: "1.0",
 			Theme:         "dark",
@@ -83,11 +92,40 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid credentials")
 		return
 	}
+	accessToken, refreshToken, expiresAt, err := s.issueDeviceTokens(req.DeviceID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "TOKEN_ISSUE_FAILED", "failed to issue token")
+		return
+	}
 	writeJSON(w, http.StatusOK, contracts.TokenResponse{
-		AccessToken:  "token-" + req.DeviceID,
-		RefreshToken: "refresh-" + req.DeviceID,
-		ExpiresAt:    time.Now().Add(1 * time.Hour),
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt,
 	})
+}
+
+func (s *Server) issueDeviceTokens(deviceID string) (string, string, time.Time, error) {
+	accessToken, err := generateToken("acc")
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	refreshToken, err := generateToken("ref")
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	expiresAt := time.Now().Add(1 * time.Hour)
+	s.mu.Lock()
+	s.tokens[accessToken] = tokenSession{DeviceID: deviceID, ExpiresAt: expiresAt}
+	s.mu.Unlock()
+	return accessToken, refreshToken, expiresAt, nil
+}
+
+func generateToken(prefix string) (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return prefix + "_" + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func (s *Server) isValidDeviceCredentials(deviceID, deviceSecret string) bool {
@@ -112,6 +150,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	deviceID, resource := parts[0], parts[1]
+	if err := s.validateDeviceBearerToken(r, deviceID); err != nil {
+		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or missing bearer token")
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && resource == "config":
 		writeJSON(w, http.StatusOK, s.config)
@@ -121,6 +163,31 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		s.mu.RUnlock()
 		if !ok {
 			status = contracts.DeviceStatus{DeviceID: deviceID, FirmwareVersion: "unknown", UpdatedAt: time.Now()}
+		}
+
+		func (s *Server) validateDeviceBearerToken(r *http.Request, deviceID string) error {
+			authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+			if authorization == "" {
+				return errors.New("missing authorization")
+			}
+			const bearerPrefix = "Bearer "
+			if !strings.HasPrefix(authorization, bearerPrefix) {
+				return errors.New("invalid scheme")
+			}
+			token := strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix))
+			if token == "" {
+				return errors.New("missing token")
+			}
+			s.mu.RLock()
+			session, ok := s.tokens[token]
+			s.mu.RUnlock()
+			if !ok || time.Now().After(session.ExpiresAt) {
+				return errors.New("invalid token")
+			}
+			if subtle.ConstantTimeCompare([]byte(session.DeviceID), []byte(deviceID)) != 1 {
+				return errors.New("token does not match device")
+			}
+			return nil
 		}
 		writeJSON(w, http.StatusOK, status)
 	case r.Method == http.MethodGet && resource == "ota" && len(parts) >= 3 && parts[2] == "latest":

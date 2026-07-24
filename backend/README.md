@@ -18,6 +18,11 @@ go run ./cmd/deskhub-backend
 - `POST /v1/devices/{deviceId}/events`
 - `GET /v1/widgets/{widgetId}/snapshot`
 
+## Autorização para endpoints de dispositivo
+
+Todos os endpoints em `/v1/devices/{deviceId}/...` exigem cabeçalho de autorização com token bearer.
+O token deve ser obtido via `POST /v1/auth/token` com `deviceId` + `deviceSecret`.
+
 ## Autenticação de dispositivo (simulador local)
 
 `POST /v1/auth/token` valida `deviceId` e `deviceSecret` contra credenciais em memória.

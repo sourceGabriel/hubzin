@@ -8,9 +8,11 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e [S
 ### Changed
 - Endurecimento de validação dos payloads REST de escrita no backend (`auth/token`, `heartbeat`, `events`) com rejeição de campos desconhecidos e conteúdo JSON extra.
 - Inclusão de validações de domínio para `heartbeat` (faixa de uso de CPU/RAM e firmware obrigatório) e `events` (schemaVersion/type obrigatórios).
+- Endpoints REST de escrita no backend agora exigem `Content-Type: application/json` e retornam `415` para media type inválido.
 
 ### Added
 - Novos testes automatizados de backend cobrindo payload inválido/extra, validação de ranges de heartbeat e validações mínimas de eventos.
+- Cobertura de testes para rejeição de content-type inválido nos endpoints de escrita.
 
 ## [0.3.0] - 2026-07-21
 ### Added

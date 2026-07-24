@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -84,6 +85,22 @@ func TestTokenRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestTokenRejectsNonJSONContentType(t *testing.T) {
+	s := NewServer()
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	payload := `{"deviceId":"dev1","deviceSecret":"x"}`
+	resp, err := doRequest(http.MethodPost, ts.URL+"/v1/auth/token", "text/plain", bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415 got %d", resp.StatusCode)
+	}
+}
+
 func TestHeartbeatUpdatesStatus(t *testing.T) {
 	s := NewServer()
 	ts := httptest.NewServer(s.Handler())
@@ -140,6 +157,22 @@ func TestHeartbeatRejectsInvalidUsageRange(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 got %d", resp.StatusCode)
+	}
+}
+
+func TestHeartbeatRejectsNonJSONContentType(t *testing.T) {
+	s := NewServer()
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	payload := `{"firmwareVersion":"0.2.0","wifiConnected":true,"mqttConnected":true,"cpuUsage":10,"ramUsage":20}`
+	resp, err := doRequest(http.MethodPost, ts.URL+"/v1/devices/dev2/heartbeat", "text/plain", bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415 got %d", resp.StatusCode)
 	}
 }
 
@@ -200,4 +233,31 @@ func TestEventsEndpointRejectsUnknownFields(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 got %d", resp.StatusCode)
 	}
+}
+
+func TestEventsEndpointRejectsNonJSONContentType(t *testing.T) {
+	s := NewServer()
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	payload := `{"schemaVersion":"1.0","type":"widget.update","data":{}}`
+	resp, err := doRequest(http.MethodPost, ts.URL+"/v1/devices/dev3/events", "text/plain", bytes.NewBufferString(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415 got %d", resp.StatusCode)
+	}
+}
+
+func doRequest(method, url, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	return http.DefaultClient.Do(req)
 }

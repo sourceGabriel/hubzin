@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -67,6 +68,10 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "invalid method")
 		return
 	}
+	if err := requireJSONContentType(r); err != nil {
+		writeErr(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content type must be application/json")
+		return
+	}
 	var req contracts.TokenRequest
 	if err := decodeStrictJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid token payload")
@@ -121,6 +126,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && resource == "ota" && len(parts) >= 3 && parts[2] == "latest":
 		writeJSON(w, http.StatusOK, s.ota)
 	case r.Method == http.MethodPost && resource == "heartbeat":
+		if err := requireJSONContentType(r); err != nil {
+			writeErr(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content type must be application/json")
+			return
+		}
 		var hb contracts.Heartbeat
 		if err := decodeStrictJSON(r, &hb); err != nil {
 			writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid heartbeat")
@@ -143,6 +152,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 	case r.Method == http.MethodPost && resource == "events":
+		if err := requireJSONContentType(r); err != nil {
+			writeErr(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content type must be application/json")
+			return
+		}
 		var ev contracts.Envelope
 		if err := decodeStrictJSON(r, &ev); err != nil {
 			writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid event")
@@ -207,6 +220,21 @@ func decodeStrictJSON(r *http.Request, target interface{}) error {
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("unexpected extra json content")
+	}
+	return nil
+}
+
+func requireJSONContentType(r *http.Request) error {
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if contentType == "" {
+		return errors.New("missing content type")
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return err
+	}
+	if mediaType != "application/json" {
+		return errors.New("unsupported content type")
 	}
 	return nil
 }

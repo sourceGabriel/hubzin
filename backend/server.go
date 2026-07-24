@@ -164,31 +164,6 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			status = contracts.DeviceStatus{DeviceID: deviceID, FirmwareVersion: "unknown", UpdatedAt: time.Now()}
 		}
-
-		func (s *Server) validateDeviceBearerToken(r *http.Request, deviceID string) error {
-			authorization := strings.TrimSpace(r.Header.Get("Authorization"))
-			if authorization == "" {
-				return errors.New("missing authorization")
-			}
-			const bearerPrefix = "Bearer "
-			if !strings.HasPrefix(authorization, bearerPrefix) {
-				return errors.New("invalid scheme")
-			}
-			token := strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix))
-			if token == "" {
-				return errors.New("missing token")
-			}
-			s.mu.RLock()
-			session, ok := s.tokens[token]
-			s.mu.RUnlock()
-			if !ok || time.Now().After(session.ExpiresAt) {
-				return errors.New("invalid token")
-			}
-			if subtle.ConstantTimeCompare([]byte(session.DeviceID), []byte(deviceID)) != 1 {
-				return errors.New("token does not match device")
-			}
-			return nil
-		}
 		writeJSON(w, http.StatusOK, status)
 	case r.Method == http.MethodGet && resource == "ota" && len(parts) >= 3 && parts[2] == "latest":
 		writeJSON(w, http.StatusOK, s.ota)
@@ -245,6 +220,31 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "resource not found")
 	}
+}
+
+func (s *Server) validateDeviceBearerToken(r *http.Request, deviceID string) error {
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authorization == "" {
+		return errors.New("missing authorization")
+	}
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authorization, bearerPrefix) {
+		return errors.New("invalid scheme")
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix))
+	if token == "" {
+		return errors.New("missing token")
+	}
+	s.mu.RLock()
+	session, ok := s.tokens[token]
+	s.mu.RUnlock()
+	if !ok || time.Now().After(session.ExpiresAt) {
+		return errors.New("invalid token")
+	}
+	if subtle.ConstantTimeCompare([]byte(session.DeviceID), []byte(deviceID)) != 1 {
+		return errors.New("token does not match device")
+	}
+	return nil
 }
 
 func (s *Server) handleWidgets(w http.ResponseWriter, r *http.Request) {

@@ -96,40 +96,40 @@ func TestTokenRejectsNonJSONContentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	func TestDeviceEndpointsRequireBearerToken(t *testing.T) {
-		s := NewServer()
-		ts := httptest.NewServer(s.Handler())
-		defer ts.Close()
-
-		resp, err := http.Get(ts.URL + "/v1/devices/dev1/config")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("expected 401 got %d", resp.StatusCode)
-		}
-	}
-
-	func TestDeviceEndpointsRejectTokenFromAnotherDevice(t *testing.T) {
-		s := NewServer()
-		ts := httptest.NewServer(s.Handler())
-		defer ts.Close()
-
-		token := issueTokenForTest(t, ts.URL, "dev1", "x")
-		resp, err := doAuthorizedRequest(http.MethodGet, ts.URL+"/v1/devices/demo-device/config", token, "", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("expected 401 got %d", resp.StatusCode)
-		}
-	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnsupportedMediaType {
 		t.Fatalf("expected 415 got %d", resp.StatusCode)
+	}
+}
+
+func TestDeviceEndpointsRequireBearerToken(t *testing.T) {
+	s := NewServer()
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/devices/dev1/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 got %d", resp.StatusCode)
+	}
+}
+
+func TestDeviceEndpointsRejectTokenFromAnotherDevice(t *testing.T) {
+	s := NewServer()
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	token := issueTokenForTest(t, ts.URL, "dev1", "x")
+	resp, err := doAuthorizedRequest(http.MethodGet, ts.URL+"/v1/devices/demo-device/config", token, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 got %d", resp.StatusCode)
 	}
 }
 
@@ -296,38 +296,38 @@ func doRequest(method, url, contentType string, body io.Reader) (*http.Response,
 	if err != nil {
 		return nil, err
 	}
-
-	func doAuthorizedRequest(method, url, token, contentType string, body io.Reader) (*http.Response, error) {
-		req, err := http.NewRequest(method, url, body)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		if contentType != "" {
-			req.Header.Set("Content-Type", contentType)
-		}
-		return http.DefaultClient.Do(req)
-	}
-
-	func issueTokenForTest(t *testing.T, baseURL, deviceID, deviceSecret string) string {
-		t.Helper()
-		payload, _ := json.Marshal(contracts.TokenRequest{DeviceID: deviceID, DeviceSecret: deviceSecret})
-		resp, err := http.Post(baseURL+"/v1/auth/token", "application/json", bytes.NewBuffer(payload))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected token 200 got %d", resp.StatusCode)
-		}
-		var token contracts.TokenResponse
-		if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
-			t.Fatal(err)
-		}
-		return token.AccessToken
-	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
 	return http.DefaultClient.Do(req)
+}
+
+func doAuthorizedRequest(method, url, token, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	return http.DefaultClient.Do(req)
+}
+
+func issueTokenForTest(t *testing.T, baseURL, deviceID, deviceSecret string) string {
+	t.Helper()
+	payload, _ := json.Marshal(contracts.TokenRequest{DeviceID: deviceID, DeviceSecret: deviceSecret})
+	resp, err := http.Post(baseURL+"/v1/auth/token", "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected token 200 got %d", resp.StatusCode)
+	}
+	var token contracts.TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+		t.Fatal(err)
+	}
+	return token.AccessToken
 }

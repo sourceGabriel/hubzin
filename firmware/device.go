@@ -66,16 +66,16 @@ func NewDevice(id, backendURL string) *Device {
 		Cache:           map[string]contracts.WidgetSnapshot{},
 		client:          &http.Client{Timeout: 2 * time.Second},
 	}
+}
 
-	func defaultDeviceSecret(deviceID string) string {
-		switch deviceID {
-		case "dev1":
-			return "x"
-		case "demo-device":
-			return "local-only"
-		default:
-			return "x"
-		}
+func defaultDeviceSecret(deviceID string) string {
+	switch deviceID {
+	case "dev1":
+		return "x"
+	case "demo-device":
+		return "local-only"
+	default:
+		return "x"
 	}
 }
 
@@ -108,89 +108,6 @@ func (d *Device) FetchConfig() error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected config status: %d", resp.StatusCode)
 	}
-
-	func (d *Device) Authenticate() error {
-		payload, err := json.Marshal(contracts.TokenRequest{
-			DeviceID:     d.ID,
-			DeviceSecret: d.DeviceSecret,
-		})
-		if err != nil {
-			return err
-		}
-		resp, err := d.client.Post(fmt.Sprintf("%s/v1/auth/token", d.BackendURL), "application/json", bytes.NewBuffer(payload))
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("unexpected auth status: %d", resp.StatusCode)
-		}
-		var token contracts.TokenResponse
-		if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
-			return err
-		}
-		d.mu.Lock()
-		d.AccessToken = token.AccessToken
-		d.TokenExpiresAt = token.ExpiresAt
-		d.mu.Unlock()
-		return nil
-	}
-
-	func (d *Device) ensureAuthenticated() error {
-		d.mu.RLock()
-		hasValidToken := strings.TrimSpace(d.AccessToken) != "" && time.Now().Before(d.TokenExpiresAt.Add(-30*time.Second))
-		d.mu.RUnlock()
-		if hasValidToken {
-			return nil
-		}
-		return d.Authenticate()
-	}
-
-	func (d *Device) doAuthorized(method, url string, body []byte, contentType string) (*http.Response, error) {
-		if err := d.ensureAuthenticated(); err != nil {
-			return nil, err
-		}
-		d.mu.RLock()
-		token := d.AccessToken
-		d.mu.RUnlock()
-		resp, err := d.doAuthorizedWithToken(method, url, body, contentType, token)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode != http.StatusUnauthorized {
-			return resp, nil
-		}
-		_ = resp.Body.Close()
-		d.mu.Lock()
-		d.AccessToken = ""
-		d.TokenExpiresAt = time.Time{}
-		d.mu.Unlock()
-		if err := d.ensureAuthenticated(); err != nil {
-			return nil, err
-		}
-		d.mu.RLock()
-		retryToken := d.AccessToken
-		d.mu.RUnlock()
-		return d.doAuthorizedWithToken(method, url, body, contentType, retryToken)
-	}
-
-	func (d *Device) doAuthorizedWithToken(method, url string, body []byte, contentType, token string) (*http.Response, error) {
-		var requestBody *bytes.Reader
-		if body == nil {
-			requestBody = bytes.NewReader([]byte{})
-		} else {
-			requestBody = bytes.NewReader(body)
-		}
-		req, err := http.NewRequest(method, url, requestBody)
-		if err != nil {
-			return nil, err
-		}
-		if contentType != "" {
-			req.Header.Set("Content-Type", contentType)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		return d.client.Do(req)
-	}
 	var cfg contracts.DeviceConfig
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
 		return err
@@ -200,6 +117,89 @@ func (d *Device) FetchConfig() error {
 	d.mu.Unlock()
 	d.ensureWidgets()
 	return nil
+}
+
+func (d *Device) Authenticate() error {
+	payload, err := json.Marshal(contracts.TokenRequest{
+		DeviceID:     d.ID,
+		DeviceSecret: d.DeviceSecret,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := d.client.Post(fmt.Sprintf("%s/v1/auth/token", d.BackendURL), "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected auth status: %d", resp.StatusCode)
+	}
+	var token contracts.TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.AccessToken = token.AccessToken
+	d.TokenExpiresAt = token.ExpiresAt
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *Device) ensureAuthenticated() error {
+	d.mu.RLock()
+	hasValidToken := strings.TrimSpace(d.AccessToken) != "" && time.Now().Before(d.TokenExpiresAt.Add(-30*time.Second))
+	d.mu.RUnlock()
+	if hasValidToken {
+		return nil
+	}
+	return d.Authenticate()
+}
+
+func (d *Device) doAuthorized(method, url string, body []byte, contentType string) (*http.Response, error) {
+	if err := d.ensureAuthenticated(); err != nil {
+		return nil, err
+	}
+	d.mu.RLock()
+	token := d.AccessToken
+	d.mu.RUnlock()
+	resp, err := d.doAuthorizedWithToken(method, url, body, contentType, token)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	d.mu.Lock()
+	d.AccessToken = ""
+	d.TokenExpiresAt = time.Time{}
+	d.mu.Unlock()
+	if err := d.ensureAuthenticated(); err != nil {
+		return nil, err
+	}
+	d.mu.RLock()
+	retryToken := d.AccessToken
+	d.mu.RUnlock()
+	return d.doAuthorizedWithToken(method, url, body, contentType, retryToken)
+}
+
+func (d *Device) doAuthorizedWithToken(method, url string, body []byte, contentType, token string) (*http.Response, error) {
+	var requestBody *bytes.Reader
+	if body == nil {
+		requestBody = bytes.NewReader([]byte{})
+	} else {
+		requestBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, requestBody)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return d.client.Do(req)
 }
 
 func (d *Device) ensureWidgets() {

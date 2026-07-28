@@ -1,0 +1,307 @@
+package backend
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"mime"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sourceGabriel/hubzin/pkg/contracts"
+)
+
+type Server struct {
+	mu            sync.RWMutex
+	deviceSecrets map[string]string
+	tokens        map[string]tokenSession
+	config        contracts.DeviceConfig
+	status        map[string]contracts.DeviceStatus
+	snapshots     map[string]contracts.WidgetSnapshot
+	ota           contracts.OTAInfo
+	events        []contracts.Envelope
+}
+
+type tokenSession struct {
+	DeviceID  string
+	ExpiresAt time.Time
+}
+
+func NewServer() *Server {
+	return &Server{
+		deviceSecrets: map[string]string{
+			"dev1":        "x",
+			"demo-device": "local-only",
+		},
+		tokens: map[string]tokenSession{},
+		config: contracts.DeviceConfig{
+			SchemaVersion: "1.0",
+			Theme:         "dark",
+			Timezone:      "UTC",
+			Pages: []contracts.PageConfig{
+				{Name: "Home", Widgets: []contracts.WidgetConfig{{ID: "clock", Name: "Clock", UpdateIntervalSec: 1}, {ID: "date", Name: "Date", UpdateIntervalSec: 1}}},
+				{Name: "Work", Widgets: []contracts.WidgetConfig{{ID: "agenda", Name: "Agenda", UpdateIntervalSec: 300}, {ID: "cpu", Name: "CPU", UpdateIntervalSec: 5}}},
+				{Name: "Music", Widgets: []contracts.WidgetConfig{{ID: "spotify", Name: "Spotify", UpdateIntervalSec: 5}}},
+				{Name: "Weather", Widgets: []contracts.WidgetConfig{{ID: "weather", Name: "Weather", UpdateIntervalSec: 900}}},
+			},
+		},
+		status: map[string]contracts.DeviceStatus{},
+		snapshots: map[string]contracts.WidgetSnapshot{
+			"weather": {WidgetID: "weather", Data: map[string]interface{}{"tempC": 24, "condition": "sunny"}, CachedAt: time.Now()},
+			"agenda":  {WidgetID: "agenda", Data: []string{"Daily standup 09:00", "Review 14:00"}, CachedAt: time.Now()},
+			"cpu":     {WidgetID: "cpu", Data: map[string]interface{}{"usage": 31.4}, CachedAt: time.Now()},
+			"spotify": {WidgetID: "spotify", Data: map[string]interface{}{"track": "N/A", "state": "paused"}, CachedAt: time.Now()},
+		},
+		ota: contracts.OTAInfo{Version: "0.2.0", Checksum: "sha256-demo", Signature: "signed-demo", DownloadURL: "https://example.invalid/ota.bin", Rollout: "stable"},
+	}
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/auth/token", s.handleToken)
+	mux.HandleFunc("/v1/devices/", s.handleDevices)
+	mux.HandleFunc("/v1/widgets/", s.handleWidgets)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	return mux
+}
+
+func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "invalid method")
+		return
+	}
+	if err := requireJSONContentType(r); err != nil {
+		writeErr(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content type must be application/json")
+		return
+	}
+	var req contracts.TokenRequest
+	if err := decodeStrictJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid token payload")
+		return
+	}
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.DeviceSecret = strings.TrimSpace(req.DeviceSecret)
+	if !s.isValidDeviceCredentials(req.DeviceID, req.DeviceSecret) {
+		writeErr(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "invalid credentials")
+		return
+	}
+	accessToken, refreshToken, expiresAt, err := s.issueDeviceTokens(req.DeviceID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "TOKEN_ISSUE_FAILED", "failed to issue token")
+		return
+	}
+	writeJSON(w, http.StatusOK, contracts.TokenResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    expiresAt,
+	})
+}
+
+func (s *Server) issueDeviceTokens(deviceID string) (string, string, time.Time, error) {
+	accessToken, err := generateToken("acc")
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	refreshToken, err := generateToken("ref")
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	expiresAt := time.Now().Add(1 * time.Hour)
+	s.mu.Lock()
+	s.tokens[accessToken] = tokenSession{DeviceID: deviceID, ExpiresAt: expiresAt}
+	s.mu.Unlock()
+	return accessToken, refreshToken, expiresAt, nil
+}
+
+func generateToken(prefix string) (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return prefix + "_" + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func (s *Server) isValidDeviceCredentials(deviceID, deviceSecret string) bool {
+	if deviceID == "" || deviceSecret == "" {
+		return false
+	}
+	s.mu.RLock()
+	expected, ok := s.deviceSecrets[deviceID]
+	s.mu.RUnlock()
+	compareAgainst := "invalid"
+	if ok {
+		compareAgainst = expected
+	}
+	return ok && subtle.ConstantTimeCompare([]byte(compareAgainst), []byte(deviceSecret)) == 1
+}
+
+func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(r.URL.Path, "/v1/devices/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) < 2 {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "resource not found")
+		return
+	}
+	deviceID, resource := parts[0], parts[1]
+	if err := s.validateDeviceBearerToken(r, deviceID); err != nil {
+		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or missing bearer token")
+		return
+	}
+	switch {
+	case r.Method == http.MethodGet && resource == "config":
+		writeJSON(w, http.StatusOK, s.config)
+	case r.Method == http.MethodGet && resource == "status":
+		s.mu.RLock()
+		status, ok := s.status[deviceID]
+		s.mu.RUnlock()
+		if !ok {
+			status = contracts.DeviceStatus{DeviceID: deviceID, FirmwareVersion: "unknown", UpdatedAt: time.Now()}
+		}
+		writeJSON(w, http.StatusOK, status)
+	case r.Method == http.MethodGet && resource == "ota" && len(parts) >= 3 && parts[2] == "latest":
+		writeJSON(w, http.StatusOK, s.ota)
+	case r.Method == http.MethodPost && resource == "heartbeat":
+		if err := requireJSONContentType(r); err != nil {
+			writeErr(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content type must be application/json")
+			return
+		}
+		var hb contracts.Heartbeat
+		if err := decodeStrictJSON(r, &hb); err != nil {
+			writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid heartbeat")
+			return
+		}
+		if strings.TrimSpace(hb.FirmwareVersion) == "" || hb.CPUUsage < 0 || hb.CPUUsage > 100 || hb.RAMUsage < 0 || hb.RAMUsage > 100 {
+			writeErr(w, http.StatusBadRequest, "INVALID_HEARTBEAT", "invalid heartbeat values")
+			return
+		}
+		s.mu.Lock()
+		s.status[deviceID] = contracts.DeviceStatus{
+			DeviceID:        deviceID,
+			FirmwareVersion: hb.FirmwareVersion,
+			CPUUsage:        hb.CPUUsage,
+			RAMUsage:        hb.RAMUsage,
+			WiFiConnected:   hb.WiFiConnected,
+			MQTTConnected:   hb.MQTTConnected,
+			UpdatedAt:       time.Now(),
+		}
+		s.mu.Unlock()
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	case r.Method == http.MethodPost && resource == "events":
+		if err := requireJSONContentType(r); err != nil {
+			writeErr(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "content type must be application/json")
+			return
+		}
+		var ev contracts.Envelope
+		if err := decodeStrictJSON(r, &ev); err != nil {
+			writeErr(w, http.StatusBadRequest, "INVALID_PAYLOAD", "invalid event")
+			return
+		}
+		ev.Type = strings.TrimSpace(ev.Type)
+		ev.SchemaVersion = strings.TrimSpace(ev.SchemaVersion)
+		if ev.Type == "" || ev.SchemaVersion == "" {
+			writeErr(w, http.StatusBadRequest, "INVALID_EVENT", "invalid event values")
+			return
+		}
+		ev.DeviceID = deviceID
+		if ev.Timestamp.IsZero() {
+			ev.Timestamp = time.Now()
+		}
+		s.mu.Lock()
+		s.events = append(s.events, ev)
+		s.mu.Unlock()
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	default:
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "resource not found")
+	}
+}
+
+func (s *Server) validateDeviceBearerToken(r *http.Request, deviceID string) error {
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authorization == "" {
+		return errors.New("missing authorization")
+	}
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authorization, bearerPrefix) {
+		return errors.New("invalid scheme")
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(authorization, bearerPrefix))
+	if token == "" {
+		return errors.New("missing token")
+	}
+	s.mu.RLock()
+	session, ok := s.tokens[token]
+	s.mu.RUnlock()
+	if !ok || time.Now().After(session.ExpiresAt) {
+		return errors.New("invalid token")
+	}
+	if subtle.ConstantTimeCompare([]byte(session.DeviceID), []byte(deviceID)) != 1 {
+		return errors.New("token does not match device")
+	}
+	return nil
+}
+
+func (s *Server) handleWidgets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "invalid method")
+		return
+	}
+	trimmed := strings.TrimPrefix(r.URL.Path, "/v1/widgets/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) != 2 || parts[1] != "snapshot" {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "resource not found")
+		return
+	}
+	id := parts[0]
+	s.mu.RLock()
+	snap, ok := s.snapshots[id]
+	s.mu.RUnlock()
+	if !ok {
+		writeErr(w, http.StatusNotFound, "WIDGET_NOT_FOUND", "widget snapshot not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeErr(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, contracts.ErrorResponse{Error: contracts.APIError{Code: code, Message: msg}})
+}
+
+func decodeStrictJSON(r *http.Request, target interface{}) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected extra json content")
+	}
+	return nil
+}
+
+func requireJSONContentType(r *http.Request) error {
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if contentType == "" {
+		return errors.New("missing content type")
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return err
+	}
+	if mediaType != "application/json" {
+		return errors.New("unsupported content type")
+	}
+	return nil
+}
